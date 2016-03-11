@@ -19,19 +19,19 @@ class GatkBestPractices extends QScript{
   /**
     * Reference genome fasta
     */
-  @Input(doc="Reference genome for the bam files", shortName="R", fullName="REF", required=true)
+  @Input(doc="Reference genome for the bam files", shortName="R", fullName="REF_FASTA", required=true)
   var referenceFile: File = null
 
   /**
     * Bam files
     */
-  @Input(doc="One or more bam files", shortName="I", fullName="INPUT", required=true)
+  @Input(doc="One or more bam files", shortName="I", fullName="INPUT_BAM", required=true)
   var bamFiles: List[File] = Nil
 
   /**
     * VCF files
     */
-  @Input(doc="VCF file(s) with known indels", fullName="KNOWN_INDELS", required=false)
+  @Input(doc="VCF file(s) with known indels", fullName="KNOWN_INDELS", required=true)
   var knownIndels: List[File] = null
   @Input(doc="Database of known variants e.g. dbSNP", fullName="KNOWN_VARIANTS", required=true)
   var knownPolymorphicSites: List[File] = null
@@ -39,14 +39,14 @@ class GatkBestPractices extends QScript{
   /**
     * Output directory
     */
-  @Input(doc="Output directory", shortName="od", fullName="OUTDIR", required=true)
+  @Input(doc="Output directory", shortName="od", fullName="OUT_DIR", required=true)
   var outputDirectory : File = null
 
   /**
     * Output file prefix not including directory
     */
   @Input(doc="Output prefix not including directory", shortName="op", fullName="OUT_PREFIX", required=true)
-  var outputPrefix : String = null
+  var outputPrefix : File = null
 
   def script() = {
 
@@ -71,6 +71,7 @@ class GatkBestPractices extends QScript{
     // TODO replace with actual output from mark duplicates
     val bamFilesDuplicatesMarked : List[File] = Nil
     // TODO
+    // TODO use duplicates marked bam files as input to pipeline
 
     /**
       * *********************************************************************
@@ -89,7 +90,6 @@ class GatkBestPractices extends QScript{
     val realignerTargetCreatorOutput : File = new File(outputDirectory.getAbsolutePath + "/" +
       outputPrefix + "_realignment_targets.list")
     realignerTargetCreator.reference_sequence = referenceFile
-    realignerTargetCreator.input_file = bamFilesDuplicatesMarked
     realignerTargetCreator.known = knownIndels
     realignerTargetCreator.out = realignerTargetCreatorOutput
     realignerTargetCreator.maxIntervalSize = int2intOption(500) // Default 500
@@ -108,7 +108,7 @@ class GatkBestPractices extends QScript{
       outputPrefix + "_realigned_reads.bam")
     indelRealigner.reference_sequence = referenceFile
     indelRealigner.targetIntervals = realignerTargetCreatorOutput
-    indelRealigner.input_file = bamFilesDuplicatesMarked
+    indelRealigner.input_file = bamFiles
     indelRealigner.knownAlleles = knownIndels
     indelRealigner.out = indelRealignerOutput
     val indelRealignerOutputAsList : List[File] = List(indelRealignerOutput)
@@ -159,7 +159,7 @@ class GatkBestPractices extends QScript{
     baseRecalibrator.deletions_default_quality = int2byteOption(45) // Default 45
     baseRecalibrator.insertions_default_quality = int2byteOption(45) // Default 45
     baseRecalibrator.low_quality_tail = int2byteOption(2) // Default 2
-    baseRecalibrator.mismatches_default_quality = -1 // Default -1
+    baseRecalibrator.mismatches_default_quality = int2byteOption(-1) // Default -1
     baseRecalibrator.quantizing_levels = int2intOption(16) // Default 16
     baseRecalibrator.run_without_dbsnp_potentially_ruining_quality = false
     add(baseRecalibrator)
