@@ -32,9 +32,15 @@ class GatkBestPractices extends QScript {
     * VCF files
     */
   @Input(doc="VCF file(s) with known indels", fullName="KNOWN_INDELS", required=true)
-  var knownIndels: List[File] = Nil
+  var knownIndels: File = null
   @Input(doc="Database of known variants e.g. dbSNP", fullName="KNOWN_VARIANTS", required=true)
-  var knownPolymorphicSites: List[File] = Nil
+  var knownPolymorphicSites: File = null
+
+  /**
+    * Downsampling fraction
+    */
+  @Argument(doc="Downsample to fraction", fullName="DOWNSAMPLE_TO_FRACTION", required=false)
+  var downsampleToFraction: Double = 1.0
 
   /**
     * Output directory
@@ -47,6 +53,15 @@ class GatkBestPractices extends QScript {
     */
   @Input(doc="Output prefix not including directory", shortName="op", fullName="OUT_PREFIX", required=true)
   var outputPrefix : File = null
+
+  /**
+    * Common arguments
+    */
+  trait CommonArguments extends CommandLineGATK {
+    this.reference_sequence = referenceFile
+    this.downsample_to_fraction = Some(downsampleToFraction)
+    // TODO other common arguments?
+  }
 
   def script() = {
 
@@ -73,143 +88,175 @@ class GatkBestPractices extends QScript {
     // TODO
     // TODO use duplicates marked bam files as input to pipeline
 
-    /**
-      * *********************************************************************
-      *              LOCAL REALIGNMENT AROUND INDELS
-      * https://www.broadinstitute.org/gatk/guide/article?id=38
-      * https://www.broadinstitute.org/gatk/guide/article?id=2800
-      * *********************************************************************
-      */
 
     /**
-      * Local realignment around indels
-      * Step 1 of 2: RealignerTargetCreator: Define intervals to target for local realignment
-      * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_indels_RealignerTargetCreator.php
+      * Container for the processed bam files
       */
-    val realignerTargetCreator = new RealignerTargetCreator
-    val realignerTargetCreatorOutput : File = new File(outputDirectory.getAbsolutePath + "/" + outputPrefix + "_realignment_targets.list")
-    realignerTargetCreator.reference_sequence = referenceFile
-    realignerTargetCreator.known = knownIndels
-    realignerTargetCreator.out = realignerTargetCreatorOutput
-    realignerTargetCreator.maxIntervalSize = int2intOption(500) // Default 500
-    realignerTargetCreator.minReadsAtLocus = int2intOption(4) // Default 4
-    realignerTargetCreator.mismatchFraction = double2doubleOption(0.0) // Default 0.0
-    realignerTargetCreator.windowSize = int2intOption(10) // Default 10
-    add(realignerTargetCreator)
+    var processedFiles = Seq.empty[File]
 
     /**
-      * Local realignment around indels
-      * Step 2 of 2: IndelRealigner: Perform local realignment of reads around indels
-      * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_indels_IndelRealigner.php
+      * **********************************************************************************************
+      *                              PER-SAMPLE DATA PROCESSING
+      * http://gatkforums.broadinstitute.org/wdl/discussion/3441/queue-how-to-connect-gatk-walkers
+      * **********************************************************************************************
       */
-    val indelRealigner = new IndelRealigner
-    val indelRealignerOutput : File = new File(outputDirectory.getAbsolutePath + "/" + outputPrefix + "_realigned_reads.bam")
-    indelRealigner.reference_sequence = referenceFile
-    indelRealigner.targetIntervals = realignerTargetCreatorOutput
-    indelRealigner.input_file = bamFiles
-    indelRealigner.knownAlleles = knownIndels
-    indelRealigner.out = indelRealignerOutput
-    val indelRealignerOutputAsList : List[File] = List(indelRealignerOutput)
-    indelRealigner.consensusDeterminationModel = null
-    indelRealigner.LODThresholdForCleaning = double2doubleOption(5.0) // Default 5.0
-    indelRealigner.nWayOut = null
-    indelRealigner.entropyThreshold = double2doubleOption(0.15) // Default 0.15
-    indelRealigner.maxConsensuses = int2intOption(30) // Default 30
-    indelRealigner.maxIsizeForMovement = int2intOption(3000) // Default 3000
-    indelRealigner.maxPositionalMoveAllowed = int2intOption(200) // Default 200
-    indelRealigner.maxReadsForConsensuses = int2intOption(120) // Default 120
-    indelRealigner.maxReadsForRealignment = int2intOption(20000) // Default 20000
-    indelRealigner.maxReadsInMemory = int2intOption(150000) // Default 150000
-    indelRealigner.noOriginalAlignmentTags = false
-    add(indelRealigner)
+    for(bam <- bamFiles) {
 
-    /**
-      * *********************************************************************
-      *              BASE QUALITY SCORE RECALIBRATION
-      * https://www.broadinstitute.org/gatk/guide/article?id=44
-      * https://www.broadinstitute.org/gatk/guide/article?id=2801
-      * *********************************************************************
-      */
+      /**
+        * *********************************************************************
+        * LOCAL REALIGNMENT AROUND INDELS
+        * https://www.broadinstitute.org/gatk/guide/article?id=38
+        * https://www.broadinstitute.org/gatk/guide/article?id=2800
+        * *********************************************************************
+        */
 
-    /**
-      * Base quality score recalibration
-      * Step 1 of 3: BaseRecalibrator: Generate base recalibration table to compensate for systematic errors in basecalling confidences
-      * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_bqsr_BaseRecalibrator.php
-      */
+      /**
+        * Local realignment around indels
+        * Step 1 of 2: RealignerTargetCreator: Define intervals to target for local realignment
+        * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_indels_RealignerTargetCreator.php
+        */
+      val realignerTargetCreator = new RealignerTargetCreator with CommonArguments
+      realignerTargetCreator.input_file +:= bam
+      realignerTargetCreator.known = Seq(knownIndels)
+      realignerTargetCreator.out = swapExt(bam, "bam", "interval_list")
+      realignerTargetCreator.maxIntervalSize = int2intOption(500) // Default 500
+      realignerTargetCreator.minReadsAtLocus = int2intOption(4) // Default 4
+      realignerTargetCreator.mismatchFraction = double2doubleOption(0.0) // Default 0.0
+      realignerTargetCreator.windowSize = int2intOption(10) // Default 10
+      add(realignerTargetCreator)
+      println("LOG:\tAdded RealignerTargetCreator. " +
+        "Input: " + realignerTargetCreator.input_file + ". " +
+        "Output: " + realignerTargetCreator.out + ".")
 
-    // Generate the first pass recalibration table file
-    val baseRecalibratorBefore = new BaseRecalibrator
-    val baseRecalibratorBeforeOutput : File = new File(outputDirectory.getAbsolutePath + "/" + outputPrefix + "_base_recalibrator_first_pass.out")
-    baseRecalibratorBefore.input_file = indelRealignerOutputAsList
-    baseRecalibratorBefore.reference_sequence = referenceFile
-    baseRecalibratorBefore.out = baseRecalibratorBeforeOutput
-    baseRecalibratorBefore.knownSites = knownPolymorphicSites
-    baseRecalibratorBefore.indels_context_size = int2intOption(3) // Default 3
-    baseRecalibratorBefore.maximum_cycle_value = int2intOption(500) // Default 500
-    baseRecalibratorBefore.mismatches_context_size = int2intOption(2) // Default 2
-    baseRecalibratorBefore.solid_nocall_strategy = null
-    baseRecalibratorBefore.solid_recal_mode = null
-    baseRecalibratorBefore.list = false
-    baseRecalibratorBefore.lowMemoryMode = false
-    baseRecalibratorBefore.no_standard_covs = false
-    baseRecalibratorBefore.sort_by_all_columns = false
-    baseRecalibratorBefore.binary_tag_name = null
-    baseRecalibratorBefore.bqsrBAQGapOpenPenalty = double2doubleOption(40.0) // Default 40.0
-    baseRecalibratorBefore.deletions_default_quality = int2byteOption(45) // Default 45
-    baseRecalibratorBefore.insertions_default_quality = int2byteOption(45) // Default 45
-    baseRecalibratorBefore.low_quality_tail = int2byteOption(2) // Default 2
-    baseRecalibratorBefore.mismatches_default_quality = int2byteOption(-1) // Default -1
-    baseRecalibratorBefore.quantizing_levels = int2intOption(16) // Default 16
-    baseRecalibratorBefore.run_without_dbsnp_potentially_ruining_quality = false
-    add(baseRecalibratorBefore)
+      /**
+        * Local realignment around indels
+        * Step 2 of 2: IndelRealigner: Perform local realignment of reads around indels
+        * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_indels_IndelRealigner.php
+        */
+      val indelRealigner = new IndelRealigner with CommonArguments
+      indelRealigner.targetIntervals = realignerTargetCreator.out
+      indelRealigner.input_file +:= bam
+      indelRealigner.knownAlleles = Seq(knownIndels)
+      indelRealigner.out = swapExt(bam, "bam", "realign.bam")
+      indelRealigner.consensusDeterminationModel = null
+      indelRealigner.LODThresholdForCleaning = double2doubleOption(5.0) // Default 5.0
+      indelRealigner.nWayOut = null
+      indelRealigner.entropyThreshold = double2doubleOption(0.15) // Default 0.15
+      indelRealigner.maxConsensuses = int2intOption(30) // Default 30
+      indelRealigner.maxIsizeForMovement = int2intOption(3000) // Default 3000
+      indelRealigner.maxPositionalMoveAllowed = int2intOption(200) // Default 200
+      indelRealigner.maxReadsForConsensuses = int2intOption(120) // Default 120
+      indelRealigner.maxReadsForRealignment = int2intOption(20000) // Default 20000
+      indelRealigner.maxReadsInMemory = int2intOption(150000) // Default 150000
+      indelRealigner.noOriginalAlignmentTags = false
+      add(indelRealigner)
+      println("LOG:\tAdded IndelRealigner. " +
+        "Input: " + indelRealigner.input_file + ". " +
+        "Output: " + indelRealigner.out + ".")
 
-    // Generate the second pass recalibration table file
-    val baseRecalibratorAfter = new BaseRecalibrator
-    val baseRecalibratorAfterOutput : File = new File(outputDirectory.getAbsolutePath + "/" + outputPrefix + "_base_recalibrator_second_pass.out")
-    baseRecalibratorAfter.BQSR = baseRecalibratorBeforeOutput
-    baseRecalibratorAfter.input_file = indelRealignerOutputAsList
-    baseRecalibratorAfter.reference_sequence = referenceFile
-    baseRecalibratorAfter.out = baseRecalibratorAfterOutput
-    baseRecalibratorAfter.knownSites = knownPolymorphicSites
-    baseRecalibratorAfter.indels_context_size = int2intOption(3) // Default 3
-    baseRecalibratorAfter.maximum_cycle_value = int2intOption(500) // Default 500
-    baseRecalibratorAfter.mismatches_context_size = int2intOption(2) // Default 2
-    baseRecalibratorAfter.solid_nocall_strategy = null
-    baseRecalibratorAfter.solid_recal_mode = null
-    baseRecalibratorAfter.list = false
-    baseRecalibratorAfter.lowMemoryMode = false
-    baseRecalibratorAfter.no_standard_covs = false
-    baseRecalibratorAfter.sort_by_all_columns = false
-    baseRecalibratorAfter.binary_tag_name = null
-    baseRecalibratorAfter.bqsrBAQGapOpenPenalty = double2doubleOption(40.0) // Default 40.0
-    baseRecalibratorAfter.deletions_default_quality = int2byteOption(45) // Default 45
-    baseRecalibratorAfter.insertions_default_quality = int2byteOption(45) // Default 45
-    baseRecalibratorAfter.low_quality_tail = int2byteOption(2) // Default 2
-    baseRecalibratorAfter.mismatches_default_quality = int2byteOption(-1) // Default -1
-    baseRecalibratorAfter.quantizing_levels = int2intOption(16) // Default 16
-    baseRecalibratorAfter.run_without_dbsnp_potentially_ruining_quality = false
-    add(baseRecalibratorAfter)
+      /**
+        * *********************************************************************
+        * BASE QUALITY SCORE RECALIBRATION
+        * https://www.broadinstitute.org/gatk/guide/article?id=44
+        * https://www.broadinstitute.org/gatk/guide/article?id=2801
+        * *********************************************************************
+        */
 
-    /**
-      * Base quality score recalibration
-      * Step 2 of 3: AnalyzeCovariates: Create plots to visualize base recalibration results
-      * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_bqsr_AnalyzeCovariates.php
-      */
-    val analyzeCovariates = new AnalyzeCovariates
-    analyzeCovariates.reference_sequence = referenceFile
-    analyzeCovariates.beforeReportFile = baseRecalibratorBeforeOutput
-    analyzeCovariates.afterReportFile = baseRecalibratorAfterOutput
-    analyzeCovariates.plotsReportFile = new File(outputDirectory.getAbsolutePath + "/" + outputPrefix + "_BQSR.pdf")
-    analyzeCovariates.intermediateCsvFile = new File(outputDirectory.getAbsolutePath + "/" + outputPrefix + "_BQSR.csv")
-    analyzeCovariates.ignoreLMT = false
+      /**
+        * Base quality score recalibration
+        * Step 1 of 3: BaseRecalibrator: Generate base recalibration table to compensate for systematic errors in basecalling confidences
+        * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_bqsr_BaseRecalibrator.php
+        */
 
+      // Generate the first pass recalibration table file
+      val baseRecalibratorBefore = new BaseRecalibrator with CommonArguments
+      baseRecalibratorBefore.input_file +:= indelRealigner.out
+      baseRecalibratorBefore.out = swapExt(indelRealigner.out, "realign.bam", "base_recalibrator_first_pass.out")
+      baseRecalibratorBefore.knownSites = Seq(knownPolymorphicSites)
+      baseRecalibratorBefore.indels_context_size = int2intOption(3) // Default 3
+      baseRecalibratorBefore.maximum_cycle_value = int2intOption(500) // Default 500
+      baseRecalibratorBefore.mismatches_context_size = int2intOption(2) // Default 2
+      baseRecalibratorBefore.solid_nocall_strategy = null
+      baseRecalibratorBefore.solid_recal_mode = null
+      baseRecalibratorBefore.list = false
+      baseRecalibratorBefore.lowMemoryMode = false
+      baseRecalibratorBefore.no_standard_covs = false
+      baseRecalibratorBefore.sort_by_all_columns = false
+      baseRecalibratorBefore.binary_tag_name = null
+      baseRecalibratorBefore.bqsrBAQGapOpenPenalty = double2doubleOption(40.0) // Default 40.0
+      baseRecalibratorBefore.deletions_default_quality = int2byteOption(45) // Default 45
+      baseRecalibratorBefore.insertions_default_quality = int2byteOption(45) // Default 45
+      baseRecalibratorBefore.low_quality_tail = int2byteOption(2) // Default 2
+      baseRecalibratorBefore.mismatches_default_quality = int2byteOption(-1) // Default -1
+      baseRecalibratorBefore.quantizing_levels = int2intOption(16) // Default 16
+      baseRecalibratorBefore.run_without_dbsnp_potentially_ruining_quality = false
+      add(baseRecalibratorBefore)
+      println("LOG:\tAdded BaseRecalibrator. " +
+        "Input: " + baseRecalibratorBefore.input_file + ". " +
+        "Output: " + baseRecalibratorBefore.out + ".")
 
-    /**
-      * Base quality score recalibration
-      * Step 3 of 3: PrintReads: Write out sequence read data (for filtering, merging, subsetting etc)
-      * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_readutils_PrintReads.php
-      */
-    // TODO
+      // Generate the second pass recalibration table file
+      val baseRecalibratorAfter = new BaseRecalibrator with CommonArguments
+      baseRecalibratorAfter.BQSR = baseRecalibratorBefore.out
+      baseRecalibratorAfter.input_file +:= indelRealigner.out
+      baseRecalibratorAfter.out = swapExt(indelRealigner.out, "realign.bam", "base_recalibrator_second_pass.out")
+      baseRecalibratorAfter.knownSites = Seq(knownPolymorphicSites)
+      baseRecalibratorAfter.indels_context_size = int2intOption(3) // Default 3
+      baseRecalibratorAfter.maximum_cycle_value = int2intOption(500) // Default 500
+      baseRecalibratorAfter.mismatches_context_size = int2intOption(2) // Default 2
+      baseRecalibratorAfter.solid_nocall_strategy = null
+      baseRecalibratorAfter.solid_recal_mode = null
+      baseRecalibratorAfter.list = false
+      baseRecalibratorAfter.lowMemoryMode = false
+      baseRecalibratorAfter.no_standard_covs = false
+      baseRecalibratorAfter.sort_by_all_columns = false
+      baseRecalibratorAfter.binary_tag_name = null
+      baseRecalibratorAfter.bqsrBAQGapOpenPenalty = double2doubleOption(40.0) // Default 40.0
+      baseRecalibratorAfter.deletions_default_quality = int2byteOption(45) // Default 45
+      baseRecalibratorAfter.insertions_default_quality = int2byteOption(45) // Default 45
+      baseRecalibratorAfter.low_quality_tail = int2byteOption(2) // Default 2
+      baseRecalibratorAfter.mismatches_default_quality = int2byteOption(-1) // Default -1
+      baseRecalibratorAfter.quantizing_levels = int2intOption(16) // Default 16
+      baseRecalibratorAfter.run_without_dbsnp_potentially_ruining_quality = false
+      add(baseRecalibratorAfter)
+      println("LOG:\tAdded BaseRecalibrator. " +
+        "Input: " + baseRecalibratorAfter.input_file + ". " +
+        "Output: " + baseRecalibratorAfter.out + ".")
+
+      /**
+        * Base quality score recalibration
+        * Step 2 of 3: AnalyzeCovariates: Create plots to visualize base recalibration results
+        * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_bqsr_AnalyzeCovariates.php
+        */
+      val analyzeCovariates = new AnalyzeCovariates with CommonArguments
+      analyzeCovariates.beforeReportFile = baseRecalibratorBefore.out
+      analyzeCovariates.afterReportFile = baseRecalibratorAfter.out
+      analyzeCovariates.plotsReportFile = new File(outputDirectory.getAbsolutePath + "/analyzeCovariates_" + swapExt(indelRealigner.out, "bam", "BQSR.pdf"))
+      analyzeCovariates.intermediateCsvFile = new File(outputDirectory.getAbsolutePath + "/analyzeCovariates_" + swapExt(indelRealigner.out, "bam", "BQSR.csv"))
+      analyzeCovariates.ignoreLMT = false
+      add(analyzeCovariates)
+      println("LOG:\tAdded AnalyzeCovariates. " +
+        "Input: " + analyzeCovariates.input_file + ". " +
+        "Plots report file: " + analyzeCovariates.plotsReportFile + ". " +
+        "Intermediate CSV file: " + analyzeCovariates.intermediateCsvFile + ".")
+
+      /**
+        * Base quality score recalibration
+        * Step 3 of 3: PrintReads: Write out sequence read data (for filtering, merging, subsetting etc)
+        * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_readutils_PrintReads.php
+        */
+      val printReads = new PrintReads with CommonArguments
+      printReads.input_file +:= bam
+      printReads.BQSR = baseRecalibratorAfter.out
+      printReads.out = swapExt(bam, "bam", "recalibrated.bam")
+      add(printReads)
+      println("LOG:\tAdded PrintReads. " +
+        "Input: " + printReads.input_file + ". " +
+        "Output: " + printReads.out + ".")
+
+      processedFiles +:= printReads.out
+
+    }
 
     /**
       * *********************************************************************
@@ -221,11 +268,30 @@ class GatkBestPractices extends QScript {
     /**
       * Variant discovery
       * Step 1 of 6: HaplotypeCaller: Call germline SNPs and indels via local re-assembly of haplotypes
-      * https://www.broadinstitute.org/gatk/guide/article?id=2803
-      * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_haplotypecaller_HaplotypeCaller.php
+      * For cohort mode, call variants per sample then combine with CombineGVCFs
       * https://www.broadinstitute.org/gatk/guide/article?id=3893
+      * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_haplotypecaller_HaplotypeCaller.php
       */
-    // TODO
+
+    /**
+      * Container for the processed bam files
+      */
+    var sampleGVCFs = Seq.empty[File]
+
+    for(processedBam <- processedFiles) {
+
+      val haplotypeCaller = new HaplotypeCaller with CommonArguments
+      haplotypeCaller.input_file = Seq(processedBam)
+      haplotypeCaller.emitRefConfidence = org.broadinstitute.gatk.tools.walkers.haplotypecaller.ReferenceConfidenceMode.GVCF
+      haplotypeCaller.dbsnp = knownPolymorphicSites
+      //haplotypeCaller.intervals = ??? // TODO do we want this?
+      haplotypeCaller.out = swapExt(processedBam, "bam", "raw.snps.indels.g.vcf")
+      add(haplotypeCaller)
+      sampleGVCFs +:= haplotypeCaller.out
+      println("LOG:\tAdded HaplotypeCaller. " +
+        "Input: " + haplotypeCaller.input_file + ". " +
+        "Output: " + haplotypeCaller.out + ".")
+    }
 
     /**
       * Variant discovery
