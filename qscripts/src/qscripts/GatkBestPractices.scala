@@ -31,10 +31,16 @@ class GatkBestPractices extends QScript {
   /**
     * VCF files
     */
-  @Input(doc="VCF file(s) with known indels", fullName="KNOWN_INDELS", required=true)
-  var knownIndels: File = null
-  @Input(doc="Database of known variants e.g. dbSNP", fullName="KNOWN_VARIANTS", required=true)
-  var knownPolymorphicSites: File = null
+  @Input(doc="VCF file of known SNPs from 1000 Genomes project", fullName="THOUSAND_GENOMES_SNPS", required=true)
+  var thousandGenomesSNPs: File = null
+  @Input(doc="VCF file of known variants from HapMap", fullName="HAPMAP", required=true)
+  var hapmap: File = null
+  @Input(doc="VCF file of known variants from dbSNP", fullName="DBSNP", required=true)
+  var dbSNP: File = null
+  @Input(doc="VCF file of known indels from Mills", fullName="MILLS_INDELS", required=true)
+  var millsIndels: File = null
+  @Input(doc="VCF file of known variants from Omni", fullName="OMNI", required=true)
+  var omni: File = null
 
   /**
     * Downsampling fraction
@@ -112,47 +118,26 @@ class GatkBestPractices extends QScript {
 
       /**
         * Local realignment around indels
-        * Step 1 of 2: RealignerTargetCreator: Define intervals to target for local realignment
+        * RealignerTargetCreator: Define intervals to target for local realignment
         * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_indels_RealignerTargetCreator.php
         */
       val realignerTargetCreator = new RealignerTargetCreator with CommonArguments
       realignerTargetCreator.input_file +:= bam
-      realignerTargetCreator.known = Seq(knownIndels)
+      realignerTargetCreator.known = Seq(millsIndels)
       realignerTargetCreator.out = swapExt(bam, "bam", "interval_list")
-      realignerTargetCreator.maxIntervalSize = int2intOption(500) // Default 500
-      realignerTargetCreator.minReadsAtLocus = int2intOption(4) // Default 4
-      realignerTargetCreator.mismatchFraction = double2doubleOption(0.0) // Default 0.0
-      realignerTargetCreator.windowSize = int2intOption(10) // Default 10
       add(realignerTargetCreator)
-      println("LOG:\tAdded RealignerTargetCreator. " +
-        "Input: " + realignerTargetCreator.input_file + ". " +
-        "Output: " + realignerTargetCreator.out + ".")
 
       /**
         * Local realignment around indels
-        * Step 2 of 2: IndelRealigner: Perform local realignment of reads around indels
+        * IndelRealigner: Perform local realignment of reads around indels
         * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_indels_IndelRealigner.php
         */
       val indelRealigner = new IndelRealigner with CommonArguments
       indelRealigner.targetIntervals = realignerTargetCreator.out
       indelRealigner.input_file +:= bam
-      indelRealigner.knownAlleles = Seq(knownIndels)
+      indelRealigner.knownAlleles = Seq(millsIndels)
       indelRealigner.out = swapExt(bam, "bam", "realign.bam")
-      indelRealigner.consensusDeterminationModel = null
-      indelRealigner.LODThresholdForCleaning = double2doubleOption(5.0) // Default 5.0
-      indelRealigner.nWayOut = null
-      indelRealigner.entropyThreshold = double2doubleOption(0.15) // Default 0.15
-      indelRealigner.maxConsensuses = int2intOption(30) // Default 30
-      indelRealigner.maxIsizeForMovement = int2intOption(3000) // Default 3000
-      indelRealigner.maxPositionalMoveAllowed = int2intOption(200) // Default 200
-      indelRealigner.maxReadsForConsensuses = int2intOption(120) // Default 120
-      indelRealigner.maxReadsForRealignment = int2intOption(20000) // Default 20000
-      indelRealigner.maxReadsInMemory = int2intOption(150000) // Default 150000
-      indelRealigner.noOriginalAlignmentTags = false
       add(indelRealigner)
-      println("LOG:\tAdded IndelRealigner. " +
-        "Input: " + indelRealigner.input_file + ". " +
-        "Output: " + indelRealigner.out + ".")
 
       /**
         * *********************************************************************
@@ -164,7 +149,7 @@ class GatkBestPractices extends QScript {
 
       /**
         * Base quality score recalibration
-        * Step 1 of 3: BaseRecalibrator: Generate base recalibration table to compensate for systematic errors in basecalling confidences
+        * BaseRecalibrator: Generate base recalibration table to compensate for systematic errors in basecalling confidences
         * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_bqsr_BaseRecalibrator.php
         */
 
@@ -172,60 +157,20 @@ class GatkBestPractices extends QScript {
       val baseRecalibratorBefore = new BaseRecalibrator with CommonArguments
       baseRecalibratorBefore.input_file +:= indelRealigner.out
       baseRecalibratorBefore.out = swapExt(indelRealigner.out, "realign.bam", "base_recalibrator_first_pass.out")
-      baseRecalibratorBefore.knownSites = Seq(knownPolymorphicSites)
-      baseRecalibratorBefore.indels_context_size = int2intOption(3) // Default 3
-      baseRecalibratorBefore.maximum_cycle_value = int2intOption(500) // Default 500
-      baseRecalibratorBefore.mismatches_context_size = int2intOption(2) // Default 2
-      baseRecalibratorBefore.solid_nocall_strategy = null
-      baseRecalibratorBefore.solid_recal_mode = null
-      baseRecalibratorBefore.list = false
-      baseRecalibratorBefore.lowMemoryMode = false
-      baseRecalibratorBefore.no_standard_covs = false
-      baseRecalibratorBefore.sort_by_all_columns = false
-      baseRecalibratorBefore.binary_tag_name = null
-      baseRecalibratorBefore.bqsrBAQGapOpenPenalty = double2doubleOption(40.0) // Default 40.0
-      baseRecalibratorBefore.deletions_default_quality = int2byteOption(45) // Default 45
-      baseRecalibratorBefore.insertions_default_quality = int2byteOption(45) // Default 45
-      baseRecalibratorBefore.low_quality_tail = int2byteOption(2) // Default 2
-      baseRecalibratorBefore.mismatches_default_quality = int2byteOption(-1) // Default -1
-      baseRecalibratorBefore.quantizing_levels = int2intOption(16) // Default 16
-      baseRecalibratorBefore.run_without_dbsnp_potentially_ruining_quality = false
+      baseRecalibratorBefore.knownSites = Seq(dbSNP)
       add(baseRecalibratorBefore)
-      println("LOG:\tAdded BaseRecalibrator. " +
-        "Input: " + baseRecalibratorBefore.input_file + ". " +
-        "Output: " + baseRecalibratorBefore.out + ".")
 
       // Generate the second pass recalibration table file
       val baseRecalibratorAfter = new BaseRecalibrator with CommonArguments
       baseRecalibratorAfter.BQSR = baseRecalibratorBefore.out
       baseRecalibratorAfter.input_file +:= indelRealigner.out
       baseRecalibratorAfter.out = swapExt(indelRealigner.out, "realign.bam", "base_recalibrator_second_pass.out")
-      baseRecalibratorAfter.knownSites = Seq(knownPolymorphicSites)
-      baseRecalibratorAfter.indels_context_size = int2intOption(3) // Default 3
-      baseRecalibratorAfter.maximum_cycle_value = int2intOption(500) // Default 500
-      baseRecalibratorAfter.mismatches_context_size = int2intOption(2) // Default 2
-      baseRecalibratorAfter.solid_nocall_strategy = null
-      baseRecalibratorAfter.solid_recal_mode = null
-      baseRecalibratorAfter.list = false
-      baseRecalibratorAfter.lowMemoryMode = false
-      baseRecalibratorAfter.no_standard_covs = false
-      baseRecalibratorAfter.sort_by_all_columns = false
-      baseRecalibratorAfter.binary_tag_name = null
-      baseRecalibratorAfter.bqsrBAQGapOpenPenalty = double2doubleOption(40.0) // Default 40.0
-      baseRecalibratorAfter.deletions_default_quality = int2byteOption(45) // Default 45
-      baseRecalibratorAfter.insertions_default_quality = int2byteOption(45) // Default 45
-      baseRecalibratorAfter.low_quality_tail = int2byteOption(2) // Default 2
-      baseRecalibratorAfter.mismatches_default_quality = int2byteOption(-1) // Default -1
-      baseRecalibratorAfter.quantizing_levels = int2intOption(16) // Default 16
-      baseRecalibratorAfter.run_without_dbsnp_potentially_ruining_quality = false
+      baseRecalibratorAfter.knownSites = Seq(dbSNP)
       add(baseRecalibratorAfter)
-      println("LOG:\tAdded BaseRecalibrator. " +
-        "Input: " + baseRecalibratorAfter.input_file + ". " +
-        "Output: " + baseRecalibratorAfter.out + ".")
 
       /**
         * Base quality score recalibration
-        * Step 2 of 3: AnalyzeCovariates: Create plots to visualize base recalibration results
+        * AnalyzeCovariates: Create plots to visualize base recalibration results
         * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_bqsr_AnalyzeCovariates.php
         */
       val analyzeCovariates = new AnalyzeCovariates with CommonArguments
@@ -235,14 +180,10 @@ class GatkBestPractices extends QScript {
       analyzeCovariates.intermediateCsvFile = new File(outputDirectory.getAbsolutePath + "/analyzeCovariates_" + swapExt(indelRealigner.out, "bam", "BQSR.csv"))
       analyzeCovariates.ignoreLMT = false
       add(analyzeCovariates)
-      println("LOG:\tAdded AnalyzeCovariates. " +
-        "Input: " + analyzeCovariates.input_file + ". " +
-        "Plots report file: " + analyzeCovariates.plotsReportFile + ". " +
-        "Intermediate CSV file: " + analyzeCovariates.intermediateCsvFile + ".")
 
       /**
         * Base quality score recalibration
-        * Step 3 of 3: PrintReads: Write out sequence read data (for filtering, merging, subsetting etc)
+        * PrintReads: Write out sequence read data (for filtering, merging, subsetting etc)
         * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_readutils_PrintReads.php
         */
       val printReads = new PrintReads with CommonArguments
@@ -250,9 +191,6 @@ class GatkBestPractices extends QScript {
       printReads.BQSR = baseRecalibratorAfter.out
       printReads.out = swapExt(bam, "bam", "recalibrated.bam")
       add(printReads)
-      println("LOG:\tAdded PrintReads. " +
-        "Input: " + printReads.input_file + ". " +
-        "Output: " + printReads.out + ".")
 
       processedFiles +:= printReads.out
 
@@ -267,7 +205,7 @@ class GatkBestPractices extends QScript {
 
     /**
       * Variant discovery
-      * Step 1 of 6: HaplotypeCaller: Call germline SNPs and indels via local re-assembly of haplotypes
+      * HaplotypeCaller: Call germline SNPs and indels via local re-assembly of haplotypes
       * For cohort mode, call variants per sample then combine with CombineGVCFs
       * https://www.broadinstitute.org/gatk/guide/article?id=3893
       * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_haplotypecaller_HaplotypeCaller.php
@@ -283,121 +221,192 @@ class GatkBestPractices extends QScript {
       val haplotypeCaller = new HaplotypeCaller with CommonArguments
       haplotypeCaller.input_file = Seq(processedBam)
       haplotypeCaller.emitRefConfidence = org.broadinstitute.gatk.tools.walkers.haplotypecaller.ReferenceConfidenceMode.GVCF
-      haplotypeCaller.dbsnp = knownPolymorphicSites
+      haplotypeCaller.dbsnp = dbSNP
       //haplotypeCaller.intervals = ??? // TODO do we want this?
       haplotypeCaller.out = swapExt(processedBam, "bam", "raw.snps.indels.g.vcf")
       add(haplotypeCaller)
       sampleGVCFs +:= haplotypeCaller.out
-      println("LOG:\tAdded HaplotypeCaller. " +
-        "Input: " + haplotypeCaller.input_file + ". " +
-        "Output: " + haplotypeCaller.out + ".")
-    }
+     }
 
     /**
       * Variant discovery
-      * Step 2 of 6: CombineGVCFs: Combine per-sample gVCF files produced by HaplotypeCaller into a multi-sample gVCF file
+      * CombineGVCFs: Combine per-sample gVCF files produced by HaplotypeCaller into a multi-sample gVCF file
       * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantutils_CombineGVCFs.php
       */
-    // TODO
+    val combineGVCFs = new CombineGVCFs with CommonArguments
+    combineGVCFs.variant = sampleGVCFs
+    combineGVCFs.dbsnp = dbSNP
+    combineGVCFs.out = "multisample.g.vcf"
+    combineGVCFs.breakBandsAtMultiplesOf = 0 // Default 0
+    combineGVCFs.convertToBasePairResolution = false // Default false
+    add(combineGVCFs)
 
     /**
       * Variant discovery
-      * Step 3 of 6: GenotypeGVCFs: Perform joint genotyping on gVCF files produced by HaplotypeCaller
+      * GenotypeGVCFs: Perform joint genotyping on gVCF files produced by HaplotypeCaller
       * https://www.broadinstitute.org/gatk/guide/article?id=3893
       * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantutils_GenotypeGVCFs.php
       */
-    // TODO
+    val genotypeGVCFs = new GenotypeGVCFs with CommonArguments
+    genotypeGVCFs.variant = Seq(combineGVCFs.out)
+    genotypeGVCFs.out = swapExt(combineGVCFs.out, "g.vcf", "genotyped.vcf")
+    genotypeGVCFs.dbsnp = dbSNP
+    add(combineGVCFs)
+
 
     /**
       * Variant discovery
-      * Step 4 of 6: VariantFiltration: Filter variant calls based on INFO and FORMAT annotations
+      * VariantFiltration: Filter variant calls based on INFO and FORMAT annotations
       * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_filters_VariantFiltration.php
       */
-    // TODO
+    // Filter with VQSR instead
 
     /**
       * Variant discovery
-      * Step 5 of 6: VariantRecalibrator: Build a recalibration model to score variant quality for filtering purposes
+      * VariantRecalibrator for SNPs: Build a recalibration model to score variant quality for filtering purposes (SNPs)
       * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantrecalibration_VariantRecalibrator.php
       * https://www.broadinstitute.org/gatk/guide/article?id=39
       * https://www.broadinstitute.org/gatk/guide/article?id=2805
-      *
+      * https://www.broadinstitute.org/gatk/guide/article?id=1259 for parameter recommendations
       */
-    // TODO
+    val variantRecalibratorSNPs = new VariantRecalibrator with CommonArguments
+    variantRecalibratorSNPs.input = Seq(genotypeGVCFs.out)
+    variantRecalibratorSNPs.recalFile = swapExt(genotypeGVCFs.out, "vcf", "SNP.recal")
+    variantRecalibratorSNPs.tranchesFile = swapExt(variantRecalibratorSNPs.recalFile, "recal", "tranches")
+    variantRecalibratorSNPs.nt = 4
+    variantRecalibratorSNPs.resource = Seq(
+      new org.broadinstitute.gatk.queue.extensions.gatk.TaggedFile(hapmap.getAbsolutePath, "known=false,training=true,truth=true,prior=15.0"),
+      new org.broadinstitute.gatk.queue.extensions.gatk.TaggedFile(omni.getAbsolutePath, "known=false,training=true,truth=true,prior=12.0"),
+      new org.broadinstitute.gatk.queue.extensions.gatk.TaggedFile(thousandGenomesSNPs.getAbsolutePath, "known=false,training=true,truth=false,prior=10.0"),
+      new org.broadinstitute.gatk.queue.extensions.gatk.TaggedFile(dbSNP.getAbsolutePath, "known=true,training=false,truth=false,prior=2.0")
+    )
+    variantRecalibratorSNPs.an = Seq("QD", "MQ", "MQRankSum", "ReadPosRankSum", "FS", "SQR", "InbreedingCoeff")
+    variantRecalibratorSNPs.mode = org.broadinstitute.gatk.tools.walkers.variantrecalibration.VariantRecalibratorArgumentCollection.Mode.SNP
+    add(variantRecalibratorSNPs)
 
     /**
       * Variant discovery
-      * Step 6 of 6: ApplyRecalibration: Apply a score cutoff to filter variants based on a recalibration table
-      * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantrecalibration_ApplyRecalibration.php
-      * https://www.broadinstitute.org/gatk/guide/article?id=2806
+      * VariantRecalibrator for indels: Build a recalibration model to score variant quality for filtering purposes (indels)
+      * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantrecalibration_VariantRecalibrator.php
+      * https://www.broadinstitute.org/gatk/guide/article?id=39
+      * https://www.broadinstitute.org/gatk/guide/article?id=2805
+      * https://www.broadinstitute.org/gatk/guide/article?id=1259 for parameter recommendations
       */
-    // TODO
+    val variantRecalibratorIndels = new VariantRecalibrator with CommonArguments
+    variantRecalibratorIndels.input = Seq(genotypeGVCFs.out)
+    variantRecalibratorIndels.recalFile = swapExt(genotypeGVCFs.out, "vcf", "indel.recal")
+    variantRecalibratorIndels.tranchesFile = swapExt(variantRecalibratorIndels.recalFile, "recal", "tranches")
+    variantRecalibratorIndels.nt = 4
+    variantRecalibratorIndels.maxGaussians = 4
+    variantRecalibratorIndels.resource = Seq(
+      new org.broadinstitute.gatk.queue.extensions.gatk.TaggedFile(millsIndels.getAbsolutePath, "known=false,training=true,truth=true,prior=12.0"),
+      new org.broadinstitute.gatk.queue.extensions.gatk.TaggedFile(dbSNP.getAbsolutePath, "known=true,training=false,truth=false,prior=2.0")
+    )
+    variantRecalibratorIndels.an = Seq("QD", "FS", "SQR", "ReadPosRankSum", "MQRankSum", "InbreedingCoeff")
+    variantRecalibratorIndels.mode = org.broadinstitute.gatk.tools.walkers.variantrecalibration.VariantRecalibratorArgumentCollection.Mode.INDEL
+    add(variantRecalibratorIndels)
+
+    /**
+      * Variant discovery
+      * ApplyRecalibration for SNPs: Apply a score cutoff to filter variants based on a recalibration table (SNPs)
+      * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantrecalibration_ApplyRecalibration.php
+      * https://www.broadinstitute.org/gatk/guide/article?id=1259 for parameter recommendations
+      */
+    val applyRecalibrationSNPs = new ApplyRecalibration with CommonArguments
+    applyRecalibrationSNPs.input = Seq(genotypeGVCFs.out)
+    applyRecalibrationSNPs.tranchesFile = variantRecalibratorSNPs.tranchesFile
+    applyRecalibrationSNPs.recalFile = variantRecalibratorSNPs.recalFile
+    applyRecalibrationSNPs.out = swapExt(applyRecalibrationSNPs.input.head, "vcf", "recalibrated.filtered.SNPs_only.vcf")
+    applyRecalibrationSNPs.ts_filter_level = 99.5
+    applyRecalibrationSNPs.mode = org.broadinstitute.gatk.tools.walkers.variantrecalibration.VariantRecalibratorArgumentCollection.Mode.SNP
+    add(applyRecalibrationSNPs)
+
+    /**
+      * Variant discovery
+      * ApplyRecalibration for indels: Apply a score cutoff to filter variants based on a recalibration table (indels)
+      * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantrecalibration_ApplyRecalibration.php
+      * https://www.broadinstitute.org/gatk/guide/article?id=1259 for parameter recommendations
+      */
+    val applyRecalibrationIndels = new ApplyRecalibration with CommonArguments
+    applyRecalibrationIndels.input = Seq(applyRecalibrationSNPs.out) // Use the VCF file generated by ApplyRecalibration for SNPs
+    applyRecalibrationIndels.tranchesFile = variantRecalibratorIndels.tranchesFile
+    applyRecalibrationIndels.recalFile = variantRecalibratorIndels.recalFile
+    applyRecalibrationIndels.out = swapExt(variantRecalibratorIndels.input.head, "recalibrated.filtered.SNPs_only.vcf", "recalibrated.filtered.vcf")
+    applyRecalibrationIndels.ts_filter_level = 99.0
+    applyRecalibrationIndels.mode = org.broadinstitute.gatk.tools.walkers.variantrecalibration.VariantRecalibratorArgumentCollection.Mode.INDEL
+    add(applyRecalibrationIndels)
 
     /**
       * *********************************************************************
       *                        CALLSET REFINEMENT
       * https://www.broadinstitute.org/gatk/guide/bp_step.php?p=3
+      * https://www.broadinstitute.org/gatk/guide/article?id=4723
       * *********************************************************************
       */
 
     /**
       * Callset refinement
-      * Step 1 of 8: CalculateGenotypePosteriors: Calculate genotype posterior likelihoods given panel data
+      * CalculateGenotypePosteriors: Calculate genotype posterior likelihoods given panel data
       * https://www.broadinstitute.org/gatk/guide/article?id=4727
       * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantutils_CalculateGenotypePosteriors.php
       */
-    // TODO
+    // Here, we follow the method to "refine the genotypes of a large panel based on the discovered allele frequency"
+    val calculateGenotypePosteriors = new CalculateGenotypePosteriors with CommonArguments
+    calculateGenotypePosteriors.variant = applyRecalibrationIndels.out
+    calculateGenotypePosteriors.out = swapExt(calculateGenotypePosteriors.variant, "vcf", "withPosteriors.vcf")
+    add(calculateGenotypePosteriors)
 
     /**
       * Callset refinement
-      * Step 2 of 8: VariantFiltration: Filter variant calls based on INFO and FORMAT annotations
+      * VariantFiltration: Filter variant calls based on INFO and FORMAT annotations
       * https://www.broadinstitute.org/gatk/guide/article?id=4727
       * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_filters_VariantFiltration.php
       */
-    // TODO
+    // Use recommendations here: https://www.broadinstitute.org/gatk/guide/article?id=4727
+    val variantFiltration = new VariantFiltration with CommonArguments
+    variantFiltration.variant = calculateGenotypePosteriors.out
+    variantFiltration.out = swapExt(variantFiltration.variant, "vcf", "Gfiltered.vcf")
+    variantFiltration.filterExpression = Seq("GQ < 20.0")
+    variantFiltration.filterName = Seq("lowGQ")
+    add(variantFiltration)
 
     /**
-      * Callset refinement
-      * Step 3 of 8: VariantAnnotator: Annotate variant calls with context information
-      * https://www.broadinstitute.org/gatk/guide/article?id=4727
-      * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_annotator_VariantAnnotator.php
+      * Other callset refinement steps that we probably don't need
+      * All listed in https://www.broadinstitute.org/gatk/guide/bp_step.php?p=3
       */
-    // TODO
 
-    /**
-      * Callset refinement
-      * Step 4 of 8: SelectVariants: Select a subset of variants from a larger callset
-      * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantutils_SelectVariants.php
-      */
-    // TODO
-
-    /**
-      * Callset refinement
-      * Step 5 of 8: CombineVariants: Combine variant records from different sources
-      * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantutils_CombineVariants.php
-      */
-    // TODO
-
-    /**
-      * Callset refinement
-      * Step 6 of 8: VariantEval: General-purpose tool for variant evaluation (% in dbSNP, genotype concordance, Ti/Tv ratios, and a lot more)
-      * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_varianteval_VariantEval.php
-      */
-    // TODO
-
-    /**
-      * Callset refinement
-      * Step 7 of 8: VariantsToTable: Extract specific fields from a VCF file to a tab-delimited table
-      * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantutils_VariantsToTable.php
-      */
-    // TODO
-
-    /**
-      * Callset refinement
-      * Step 8 of 8: GenotypeConcordance (Picard version): Genotype concordance
-      * https://broadinstitute.github.io/picard/command-line-overview.html#GenotypeConcordance
-      */
-    // TODO
+//    /**
+//      * VariantAnnotator: Annotate variant calls with context information (annotate possible de novo mutations)
+//      * https://www.broadinstitute.org/gatk/guide/article?id=4727
+//      * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_annotator_VariantAnnotator.php
+//      */
+//    // Can't call de novo mutations without pedigree information
+//    // See https://www.broadinstitute.org/gatk/guide/article?id=4723 and https://www.broadinstitute.org/gatk/guide/article?id=4727
+//
+//    /**
+//      * SelectVariants: Select a subset of variants from a larger callset
+//      * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantutils_SelectVariants.php
+//      */
+//
+//    /**
+//      * CombineVariants: Combine variant records from different sources
+//      * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantutils_CombineVariants.php
+//      */
+//
+//    /**
+//      * VariantEval: General-purpose tool for variant evaluation (% in dbSNP, genotype concordance, Ti/Tv ratios, and a lot more)
+//      * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_varianteval_VariantEval.php
+//      */
+//
+//    /**
+//      * VariantsToTable: Extract specific fields from a VCF file to a tab-delimited table
+//      * https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantutils_VariantsToTable.php
+//      */
+//
+//    /**
+//      * GenotypeConcordance (Picard version): Genotype concordance
+//      * https://broadinstitute.github.io/picard/command-line-overview.html#GenotypeConcordance
+//      */
 
 
 
