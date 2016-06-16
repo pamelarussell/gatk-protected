@@ -43,10 +43,10 @@ class GatkBestPractices extends QScript {
   var omni: File = null
 
   /**
-    * Downsampling fraction
+    * Targeted intervals
     */
-  @Argument(doc="Downsample to fraction", fullName="DOWNSAMPLE_TO_FRACTION", required=false)
-  var downsampleToFraction: Double = 1.0
+  @Input(doc="File of targeted intervals", shortName="ti", fullName="TARGETED_INTERVALS", required=true)
+  var intervalsFile : File = null
 
   /**
     * Output directory
@@ -65,8 +65,7 @@ class GatkBestPractices extends QScript {
     */
   trait CommonArguments extends CommandLineGATK {
     this.reference_sequence = referenceFile
-    this.downsample_to_fraction = Some(downsampleToFraction)
-    // TODO other common arguments?
+    this.intervals = Seq(intervalsFile)
   }
 
   def script() = {
@@ -87,12 +86,7 @@ class GatkBestPractices extends QScript {
       * *********************************************************************
       */
 
-    // TODO fix dependency issue to get picard package
-    //val markDuplicates = new MarkDuplicates
-    // TODO replace with actual output from mark duplicates
-    val bamFilesDuplicatesMarked : List[File] = Nil
     // TODO
-    // TODO use duplicates marked bam files as input to pipeline
 
 
     /**
@@ -222,7 +216,6 @@ class GatkBestPractices extends QScript {
       haplotypeCaller.input_file = Seq(processedBam)
       haplotypeCaller.emitRefConfidence = org.broadinstitute.gatk.tools.walkers.haplotypecaller.ReferenceConfidenceMode.GVCF
       haplotypeCaller.dbsnp = dbSNP
-      //haplotypeCaller.intervals = ??? // TODO do we want this?
       haplotypeCaller.out = swapExt(processedBam, "bam", "raw.snps.indels.g.vcf")
       add(haplotypeCaller)
       sampleGVCFs +:= haplotypeCaller.out
