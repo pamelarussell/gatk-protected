@@ -6,6 +6,9 @@ workflow GatkBestPractices {
     File refIndex               # Index for reference genome fasta
     File refSeqDict             # Dict file for reference genome
     File targetedIntervals      # BED file of targeted genomic intervals
+    String xmx                  # JVM xmx option for GATK jobs
+    String xms                  # JVM xms option for GATK jobs
+    String xmn                  # JVM xmn option for GATK jobs
 
     # Other options
     File sampleTable            # Table of sample, bam file
@@ -26,6 +29,9 @@ workflow GatkBestPractices {
                 refIdx = refIndex,
                 refDict = refSeqDict,
                 intervals = targetedIntervals,
+                xmx = xmx,
+                xms = xms,
+                xmn = xmn,
                 sample = sampleBam[0],
                 bam = sampleBam[1],
                 bamIdx = sampleBam[2],
@@ -39,6 +45,9 @@ workflow GatkBestPractices {
                 refIdx = refIndex,
                 refDict = refSeqDict,
                 intervals = targetedIntervals,
+                xmx = xmx,
+                xms = xms,
+                xmn = xmn,
                 sample = sampleBam[0],
                 bam = sampleBam[1],
                 bamIdx = sampleBam[2],
@@ -46,19 +55,11 @@ workflow GatkBestPractices {
                 realignerTargets = realignerTargetCreator.realignerTargets
         }
 
-#        call taskName {
-#            input:
-#                gatk = gatkJar,
-#                ref = refFasta,
-#                refIdx = refIndex,
-#                refDict = refSeqDict,
-#                intervals = targetedIntervals
-#        }
+
 
     }
 
 }
-
 
 
 task realignerTargetCreator {
@@ -70,6 +71,9 @@ task realignerTargetCreator {
     File refIdx
     File refDict
     File intervals
+    String xmx
+    String xms
+    String xmn
 
     # Other options
     String sample
@@ -78,7 +82,9 @@ task realignerTargetCreator {
     File indels
 
     command {
-        java -jar ${gatk} \
+        java \
+        -Xmx${xmx} -Xms${xms} -Xmn${xmn} -jar \
+        ${gatk} \
         -R ${ref} \
         -L ${intervals} \
         -T RealignerTargetCreator \
@@ -101,6 +107,9 @@ task indelRealigner {
     File refIdx
     File refDict
     File intervals
+    String xmx
+    String xms
+    String xmn
 
     # Other options
     File realignerTargets # Output from RealignerTargetCreator
@@ -110,7 +119,9 @@ task indelRealigner {
     File indels
 
     command {
-        java -jar ${gatk} \
+        java \
+        -Xmx${xmx} -Xms${xms} -Xmn${xmn} -jar \
+        ${gatk} \
         -R ${ref} \
         -L ${intervals} \
         -T IndelRealigner \
@@ -126,30 +137,6 @@ task indelRealigner {
 
 }
 
-task taskName {
-# web page
-
-    # Common options
-    File gatk
-    File ref
-    File refIdx
-    File refDict
-    File intervals
-
-    # Other options
-
-
-    command {
-        java -jar ${gatk} \
-        -R ${ref} \
-        -L ${intervals} \
-        -T
-
-    }
-
-    output {
-
-    }
 
 }
 
