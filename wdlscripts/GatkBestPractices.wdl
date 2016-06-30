@@ -120,6 +120,160 @@ workflow GatkBestPractices {
                 bqsr = baseRecalibratorAfter.out
         }
 
+        call haplotypeCaller {
+            input:
+                gatk = gatk,
+                ref = ref,
+                refIdx = refIdx,
+                refDict = refDict,
+                intervals = intervals,
+                xmx = xmx,
+                xms = xms,
+                xmn = xmn,
+                sample = sampleBam[0],
+                bam = printReads.out,
+                bamIdx = printReads.outIdx,
+                emitRefConfidence = "GVCF",
+                dbSNP = dbSNP
+        }
+
+    }
+
+    call combineGVCFs {
+        input:
+            gatk = gatk,
+            ref = ref,
+            refIdx = refIdx,
+            refDict = refDict,
+            intervals = intervals,
+            xmx = xmx,
+            xms = xms,
+            xmn = xmn,
+            gVCFs = haplotypeCaller.out,
+            dbSNP = dbSNP
+    }
+
+    call genotypeGVCFs {
+        input:
+            gatk = gatk,
+            ref = ref,
+            refIdx = refIdx,
+            refDict = refDict,
+            intervals = intervals,
+            xmx = xmx,
+            xms = xms,
+            xmn = xmn,
+            variant = combineGVCFs.out,
+            dbSNP = dbSNP
+    }
+
+    call variantRecalibratorSNPs {
+        input:
+            gatk = gatk,
+            ref = ref,
+            refIdx = refIdx,
+            refDict = refDict,
+            intervals = intervals,
+            xmx = xmx,
+            xms = xms,
+            xmn = xmn,
+            vcf = genotypeGVCFs.out,
+            nt = 4,
+            hapmap = hapmap,
+            omni = omni,
+            thousandGenomes = thousandGenomesSNPs,
+            dbSNP = dbSNP,
+            hapmapParam = "known=false,training=true,truth=true,prior=15.0",
+            omniParam = "known=false,training=true,truth=true,prior=12.0",
+            thousandGenomesParam = "known=false,training=true,truth=false,prior=10.0",
+            dbSNPParam = "known=true,training=false,truth=false,prior=2.0",
+            an = ["QD", "MQ", "MQRankSum", "ReadPosRankSum", "FS", "SQR", "InbreedingCoeff"],
+            mode = "SNP"
+    }
+
+    call variantRecalibratorIndels {
+        input:
+            gatk = gatk,
+            ref = ref,
+            refIdx = refIdx,
+            refDict = refDict,
+            intervals = intervals,
+            xmx = xmx,
+            xms = xms,
+            xmn = xmn,
+            vcf = genotypeGVCFs.out,
+            nt = 4,
+            maxGaussians = 4,
+            dbSNP = dbSNP,
+            millsIndels = millsIndels,
+            dbSNPParam = "known=true,training=false,truth=false,prior=2.0",
+            millsParam = "known=false,training=true,truth=true,prior=12.0",
+            an = ["QD", "FS", "SQR", "ReadPosRankSum", "MQRankSum", "InbreedingCoeff"],
+            mode = "INDEL"
+    }
+
+    call applyRecalibrationSNPs {
+         input:
+             gatk = gatk,
+             ref = ref,
+             refIdx = refIdx,
+             refDict = refDict,
+             intervals = intervals,
+             xmx = xmx,
+             xms = xms,
+             xmn = xmn,
+             vcf = genotypeGVCFs.out,
+             tranchesFile = variantRecalibratorSNPs.tranches,
+             recalFile = variantRecalibratorSNPs.recal,
+             tsFilterLevel = 99.5,
+             mode = "SNP"
+
+    }
+
+    call applyRecalibrationIndels {
+         input:
+             gatk = gatk,
+             ref = ref,
+             refIdx = refIdx,
+             refDict = refDict,
+             intervals = intervals,
+             xmx = xmx,
+             xms = xms,
+             xmn = xmn,
+             vcf = applyRecalibrationSNPs.out,
+             tranchesFile = variantRecalibratorIndels.tranches,
+             recalFile = variantRecalibratorIndels.recal,
+             tsFilterLevel = 99.0,
+             mode = "INDEL"
+
+    }
+
+    call calculateGenotypePosteriors {
+         input:
+             gatk = gatk,
+             ref = ref,
+             refIdx = refIdx,
+             refDict = refDict,
+             intervals = intervals,
+             xmx = xmx,
+             xms = xms,
+             xmn = xmn,
+             vcf = applyRecalibrationIndels.out
+    }
+
+    call variantFiltration {
+         input:
+             gatk = gatk,
+             ref = ref,
+             refIdx = refIdx,
+             refDict = refDict,
+             intervals = intervals,
+             xmx = xmx,
+             xms = xms,
+             xmn = xmn,
+             vcf = calculateGenotypePosteriors.out,
+             filterName = "lowGQ",
+             filterExpression = "\"GQ < 20.0\""
     }
 
 }
@@ -381,6 +535,403 @@ task printReads {
 
     output {
         File out = "${sample}.recalibrated.bam"
+        File outIdx = "${sample}.recalibrated.bai"
     }
+
+}
+
+
+# **********************************************************************
+# VARIANT DISCOVERY
+# https://www.broadinstitute.org/gatk/guide/bp_step.php?p=2
+# **********************************************************************
+
+task haplotypeCaller {
+# haplotypeCaller: Call germline SNPs and indels via local re-assembly of haplotypes
+# For cohort mode, call variants per sample then combine with CombineGVCFs
+# https://www.broadinstitute.org/gatk/guide/article?id=3893
+# https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_haplotypecaller_HaplotypeCaller.php
+
+    # Common options
+    File gatk
+    File ref
+    File refIdx
+    File refDict
+    File intervals
+    String xmx
+    String xms
+    String xmn
+
+    # Other options
+    File bam # processed bam
+    File bamIdx
+    String emitRefConfidence # mode for emitting reference confidence scores e.g. GVCF
+    File dbSNP
+    String sample
+
+    command {
+        java \
+        -Xmx${xmx} -Xms${xms} -Xmn${xmn} -jar \
+        ${gatk} \
+        -R ${ref} \
+        -L ${intervals} \
+        -T HaplotypeCaller \
+        -I ${bam} \
+        --emitRefConfidence ${emitRefConfidence} \
+        --dbsnp ${dbSNP} \
+        -o ${sample}.recalibrated.raw.snps.indels.g.vcf
+    }
+
+    output {
+        File out = "${sample}.recalibrated.raw.snps.indels.g.vcf"
+    }
+
+
+}
+
+task combineGVCFs {
+# CombineGVCFs: Combine per-sample gVCF files produced by HaplotypeCaller into a multi-sample gVCF file
+# https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantutils_CombineGVCFs.php
+
+    # Common options
+    File gatk
+    File ref
+    File refIdx
+    File refDict
+    File intervals
+    String xmx
+    String xms
+    String xmn
+
+    # Other options
+    Array[File] gVCFs # Output from haplotypeCaller
+    File dbSNP
+
+    command {
+        java \
+        -Xmx${xmx} -Xms${xms} -Xmn${xmn} -jar \
+        ${gatk} \
+        -R ${ref} \
+        -L ${intervals} \
+        -T CombineGVCFs \
+        -V ${sep = " -V " gVCFs} \
+        -o "multisample.g.vcf"
+    }
+
+    output {
+        File out = "multisample.g.vcf"
+    }
+
+
+}
+
+task genotypeGVCFs {
+# GenotypeGVCFs: Perform joint genotyping on gVCF files produced by HaplotypeCaller
+# https://www.broadinstitute.org/gatk/guide/article?id=3893
+# https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantutils_GenotypeGVCFs.php
+
+    # Common options
+    File gatk
+    File ref
+    File refIdx
+    File refDict
+    File intervals
+    String xmx
+    String xms
+    String xmn
+
+    # Other options
+    File variant # Output from combineGVCFs
+    File dbSNP
+
+    command {
+        java \
+        -Xmx${xmx} -Xms${xms} -Xmn${xmn} -jar \
+        ${gatk} \
+        -R ${ref} \
+        -L ${intervals} \
+        -T GenotypeGVCFs \
+        -V ${variant} \
+        -o "multisample.genotyped.vcf"
+    }
+
+    output {
+        File out = "multisample.genotyped.vcf"
+    }
+
+}
+
+task variantRecalibratorSNPs {
+# VariantRecalibrator for SNPs: Build a recalibration model to score variant quality for filtering purposes (SNPs)
+# https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantrecalibration_VariantRecalibrator.php
+# https://www.broadinstitute.org/gatk/guide/article?id=39
+# https://www.broadinstitute.org/gatk/guide/article?id=2805
+# https://www.broadinstitute.org/gatk/guide/article?id=1259 for parameter recommendations
+
+    # Common options
+    File gatk
+    File ref
+    File refIdx
+    File refDict
+    File intervals
+    String xmx
+    String xms
+    String xmn
+
+    # Other options
+    File vcf # output from GenotypeGVCFs
+    Int nt # number of threads
+    File hapmap
+    File omni
+    File thousandGenomes
+    File dbSNP
+    String hapmapParam
+    String omniParam
+    String thousandGenomesParam
+    String dbSNPParam
+    Array[String] an # names of annotations which should be used for calculations
+    String mode
+
+    command {
+        java \
+        -Xmx${xmx} -Xms${xms} -Xmn${xmn} -jar \
+        ${gatk} \
+        -R ${ref} \
+        -L ${intervals} \
+        -T VariantRecalibrator \
+        -input ${vcf} \
+        -nt ${nt} \
+        -resource:hapmap,${hapmapParam} ${hapmap} \
+        -resource:omni,${omniParam} ${omni} \
+        -resource:1000G,${thousandGenomesParam} ${thousandGenomes} \
+        -resource:dbsnp,${dbSNPParam} ${dbSNP} \
+        -an ${sep = " -an " an} \
+        -mode ${mode}
+    }
+
+    output {
+        File recal = "multisample.genotyped.SNP.recal"
+        File tranches = "multisample.genotyped.SNP.tranches"
+    }
+
+}
+
+task variantRecalibratorIndels {
+# VariantRecalibrator for SNPs: Build a recalibration model to score variant quality for filtering purposes (SNPs)
+# https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantrecalibration_VariantRecalibrator.php
+# https://www.broadinstitute.org/gatk/guide/article?id=39
+# https://www.broadinstitute.org/gatk/guide/article?id=2805
+# https://www.broadinstitute.org/gatk/guide/article?id=1259 for parameter recommendations
+
+    # Common options
+    File gatk
+    File ref
+    File refIdx
+    File refDict
+    File intervals
+    String xmx
+    String xms
+    String xmn
+
+    # Other options
+    File vcf # output from GenotypeGVCFs
+    Int nt # number of threads
+    Int maxGaussians
+    File dbSNP
+    File millsIndels
+    String dbSNPParam
+    String millsParam
+    Array[String] an # names of annotations which should be used for calculations
+    String mode
+
+    command {
+        java \
+        -Xmx${xmx} -Xms${xms} -Xmn${xmn} -jar \
+        ${gatk} \
+        -R ${ref} \
+        -L ${intervals} \
+        -T VariantRecalibrator \
+        -input ${vcf} \
+        -nt ${nt} \
+        -resource:dbsnp,${dbSNPParam} ${dbSNP} \
+        -resource:millsIndels,${millsParam} ${millsIndels} \
+        -an ${sep = " -an " an} \
+        -mode ${mode}
+    }
+
+    output {
+        File recal = "multisample.genotyped.indel.recal"
+        File tranches = "multisample.genotyped.indel.tranches"
+    }
+
+}
+
+task applyRecalibrationSNPs {
+# ApplyRecalibration for SNPs: Apply a score cutoff to filter variants based on a recalibration table (SNPs)
+# https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantrecalibration_ApplyRecalibration.php
+# https://www.broadinstitute.org/gatk/guide/article?id=1259 for parameter recommendations
+
+    # Common options
+    File gatk
+    File ref
+    File refIdx
+    File refDict
+    File intervals
+    String xmx
+    String xms
+    String xmn
+
+    # Other options
+    File vcf # output from GenotypeGVCFs
+    File tranchesFile # output from VariantRecalibrator
+    File recalFile # output from VariantRecalibrator
+    Float tsFilterLevel
+    String mode
+
+    command {
+        java \
+        -Xmx${xmx} -Xms${xms} -Xmn${xmn} -jar \
+        ${gatk} \
+        -R ${ref} \
+        -L ${intervals} \
+        -T ApplyRecalibration \
+        -input ${vcf} \
+        --ts_filter_level ${tsFilterLevel} \
+        -tranchesFile ${tranchesFile} \
+        -recalFile ${recalFile} \
+        -mode ${mode} \
+        -o "multisample.genotyped.recalibrated.filtered.SNPs_only.vcf"
+    }
+
+    output {
+        File out = "multisample.genotyped.recalibrated.filtered.SNPs_only.vcf"
+    }
+
+}
+
+task applyRecalibrationIndels {
+# ApplyRecalibration for indels: Apply a score cutoff to filter variants based on a recalibration table (SNPs)
+# https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantrecalibration_ApplyRecalibration.php
+# https://www.broadinstitute.org/gatk/guide/article?id=1259 for parameter recommendations
+
+    # Common options
+    File gatk
+    File ref
+    File refIdx
+    File refDict
+    File intervals
+    String xmx
+    String xms
+    String xmn
+
+    # Other options
+    File vcf # output from ApplyRecalibration for SNPs
+    File tranchesFile # output from VariantRecalibrator
+    File recalFile # output from VariantRecalibrator
+    Float tsFilterLevel
+    String mode
+
+    command {
+        java \
+        -Xmx${xmx} -Xms${xms} -Xmn${xmn} -jar \
+        ${gatk} \
+        -R ${ref} \
+        -L ${intervals} \
+        -T ApplyRecalibration \
+        -input ${vcf} \
+        --ts_filter_level ${tsFilterLevel} \
+        -tranchesFile ${tranchesFile} \
+        -recalFile ${recalFile} \
+        -mode ${mode} \
+        -o "multisample.genotyped.recalibrated.filtered.vcf"
+    }
+
+    output {
+        File out = "multisample.genotyped.recalibrated.filtered.vcf"
+    }
+
+}
+
+
+# *********************************************************************
+#                        CALLSET REFINEMENT
+# https://www.broadinstitute.org/gatk/guide/bp_step.php?p=3
+# https://www.broadinstitute.org/gatk/guide/article?id=4723
+# *********************************************************************
+
+task calculateGenotypePosteriors {
+# CalculateGenotypePosteriors: Calculate genotype posterior likelihoods given panel data
+# https://www.broadinstitute.org/gatk/guide/article?id=4727
+# https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_variantutils_CalculateGenotypePosteriors.php
+# Here, we follow the method to "refine the genotypes of a large panel based on the discovered allele frequency"
+
+    # Common options
+    File gatk
+    File ref
+    File refIdx
+    File refDict
+    File intervals
+    String xmx
+    String xms
+    String xmn
+
+    # Other options
+    File vcf # output from ApplyRecalibration for indels
+
+    command {
+        java \
+        -Xmx${xmx} -Xms${xms} -Xmn${xmn} -jar \
+        ${gatk} \
+        -R ${ref} \
+        -L ${intervals} \
+        -T ApplyRecalibration \
+        -V ${vcf} \
+        -o "multisample.genotyped.recalibrated.filtered.withPosteriors.vcf"
+    }
+
+    output {
+        File out = "multisample.genotyped.recalibrated.filtered.withPosteriors.vcf"
+    }
+
+}
+
+task variantFiltration {
+# VariantFiltration: Filter variant calls based on INFO and FORMAT annotations
+# https://www.broadinstitute.org/gatk/guide/article?id=4727
+# https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_filters_VariantFiltration.php
+# Use recommendations here: https://www.broadinstitute.org/gatk/guide/article?id=4727
+
+    # Common options
+    File gatk
+    File ref
+    File refIdx
+    File refDict
+    File intervals
+    String xmx
+    String xms
+    String xmn
+
+    # Other options
+    File vcf # output from calculateGenotypePosteriors
+    String filterName
+    String filterExpression # in double quotes
+
+    command {
+        java \
+        -Xmx${xmx} -Xms${xms} -Xmn${xmn} -jar \
+        ${gatk} \
+        -R ${ref} \
+        -L ${intervals} \
+        -T VariantFiltration \
+        -V ${vcf} \
+        -G_filter ${filterExpression} \
+        -G_filterName ${filterName} \
+        -o "multisample.genotyped.recalibrated.filtered.withPosteriors.Gfiltered.vcf"
+    }
+
+    output {
+        File out = "multisample.genotyped.recalibrated.filtered.withPosteriors.Gfiltered.vcf"
+    }
+
 
 }
